@@ -1,13 +1,13 @@
-package com.example;
+package com.geeta.sidebarmanager;
 
 import net.runelite.client.RuneLite;
 import net.runelite.client.externalplugins.ExternalPluginManager;
 
-public class ExamplePluginTest
+public class SidebarManagerTest
 {
 	public static void main(String[] args) throws Exception
 	{
-		ExternalPluginManager.loadBuiltin(ExamplePlugin.class);
+		ExternalPluginManager.loadBuiltin(SidebarManagerPlugin.class);
 		RuneLite.main(args);
 	}
 }

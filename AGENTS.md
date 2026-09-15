@@ -50,8 +50,7 @@
 
 ## Plugin Setup & Packaging
 
-- Rename everything from the template. Do not leave `com.example`, `ExamplePlugin`, `ExampleConfig`, or `example` as the config group. Rename the package path, class names, config group, `build.gradle` group, `settings.gradle` project name, and `runelite-plugin.properties`.
-- Do not include a `META-INF/services/net.runelite.client.plugins.Plugin` file.
+- Rename everything from the template. Do not leave `com.example`, `ExamplePlugin`, `ExampleConfig`, or `example` as the config group. Rename the package path, class names, config group, `build.gradle` group, `settings.gradle` project name, and `runelite-plugin.properties`.- Do not include a `META-INF/services/net.runelite.client.plugins.Plugin` file.
 - Do not commit build artifacts — no `.class` files, `out/` directories, or `.tmp` directories.
 - `build.gradle` must target Java 11** and match the structure of the example-plugin template.
 - Retain a permissive license, such as BSD-2.
