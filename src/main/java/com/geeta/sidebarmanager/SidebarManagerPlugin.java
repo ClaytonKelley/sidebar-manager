@@ -55,6 +55,7 @@ public class SidebarManagerPlugin extends Plugin
 
 		clientToolbar.addNavigation(navigationButton);
 		sidebarManager.start();
+
 	}
 
 	@Override
@@ -97,6 +98,10 @@ public class SidebarManagerPlugin extends Plugin
 
 			case "hiddenItems":
 				sidebarManager.applyHiddenSettings();
+				break;
+
+			case "itemOrder":
+				sidebarManager.applyOrderSettings();
 				break;
 
 			default:

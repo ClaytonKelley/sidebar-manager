@@ -98,6 +98,16 @@ public interface SidebarManagerConfig extends Config
 		return "";
 	}
 
+	@ConfigItem(
+			keyName = "itemOrder",
+			name = "Item Order",
+			description = "Stores the custom sidebar item order",
+			hidden = true
+	)
+	default String itemOrder()
+	{
+		return "";
+	}
 	enum NameAlignment
 	{
 		LEFT,

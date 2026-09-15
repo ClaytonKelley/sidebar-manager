@@ -23,6 +23,7 @@ public class SidebarManager
 {
     private static final String CONFIG_GROUP = "sidebarmanager";
     private static final String HIDDEN_ITEMS_KEY = "hiddenItems";
+    private static final String ITEM_ORDER_KEY = "itemOrder";
     private static final String DEFAULT_STYLE =
             "tabInsets: 2,5,2,5; " +
                     "variableSize: true; " +
@@ -63,7 +64,9 @@ public class SidebarManager
             }
 
             captureItems();
+            applySavedItemOrder();
             applyHiddenItems();
+            rebuildSidebarOrder();
             applySidebarSettings();
             installSidebarListener();
 
@@ -928,4 +931,174 @@ public class SidebarManager
         });
     }
 
+    public void moveItem(SidebarItem item, int newIndex)
+    {
+        if (sidebar == null || item == null)
+        {
+            return;
+        }
+
+        int currentIndex = items.indexOf(item);
+
+        if (currentIndex == -1 || newIndex < 0 || newIndex >= items.size() || currentIndex == newIndex)
+        {
+            return;
+        }
+
+        items.remove(currentIndex);
+        items.add(newIndex, item);
+        saveItemOrder();
+        rebuildSidebarOrder();
+
+        if (panel != null)
+        {
+            panel.refresh();
+        }
+    }
+
+    private void rebuildSidebarOrder()
+    {
+        int selectedIndex = sidebar.getSelectedIndex();
+        Component selectedComponent = selectedIndex != -1
+                ? sidebar.getComponentAt(selectedIndex)
+                : null;
+
+        for (SidebarItem item : items)
+        {
+            int index = sidebar.indexOfComponent(item.getComponent());
+
+            if (index != -1)
+            {
+                sidebar.removeTabAt(index);
+            }
+        }
+
+        for (SidebarItem item : items)
+        {
+            if (isHidden(item))
+            {
+                continue;
+            }
+
+            sidebar.insertTab(
+                    null,
+                    item.getOriginalIcon(),
+                    item.getComponent(),
+                    item.getTooltip(),
+                    sidebar.getTabCount()
+            );
+
+            updateTab(sidebar.getTabCount() - 1);
+        }
+
+        if (selectedComponent != null)
+        {
+            int newSelectedIndex = sidebar.indexOfComponent(selectedComponent);
+
+            if (newSelectedIndex != -1)
+            {
+                sidebar.setSelectedIndex(newSelectedIndex);
+            }
+        }
+
+        clearSidebarSizeConstraint();
+        sidebar.revalidate();
+        sidebar.repaint();
+
+        SwingUtilities.invokeLater(this::updateCollapsedWidth);
+    }
+    private void saveItemOrder()
+    {
+        List<String> names = new ArrayList<>();
+
+        for (SidebarItem item : items)
+        {
+            names.add(item.getName());
+        }
+
+        configManager.setConfiguration(
+                CONFIG_GROUP,
+                ITEM_ORDER_KEY,
+                String.join("\n", names)
+        );
+    }
+
+    private void applySavedItemOrder()
+    {
+        String savedOrder = configManager.getConfiguration(
+                CONFIG_GROUP,
+                ITEM_ORDER_KEY
+        );
+
+        if (savedOrder == null || savedOrder.isEmpty())
+        {
+            return;
+        }
+
+        List<SidebarItem> orderedItems = new ArrayList<>();
+
+        for (String name : savedOrder.split("\n"))
+        {
+            for (SidebarItem item : items)
+            {
+                if (name.equals(item.getName()) && !orderedItems.contains(item))
+                {
+                    orderedItems.add(item);
+                    break;
+                }
+            }
+        }
+
+        for (SidebarItem item : items)
+        {
+            if (!orderedItems.contains(item))
+            {
+                orderedItems.add(item);
+            }
+        }
+
+        items.clear();
+        items.addAll(orderedItems);
+    }
+
+    public void resetItemOrder()
+    {
+        if (sidebar == null)
+        {
+            return;
+        }
+
+        items.sort((a, b) ->
+                Integer.compare(a.getOriginalIndex(), b.getOriginalIndex()));
+
+        configManager.unsetConfiguration(CONFIG_GROUP, ITEM_ORDER_KEY);
+
+        rebuildSidebarOrder();
+
+        if (panel != null)
+        {
+            panel.refresh();
+        }
+    }
+    public void applyOrderSettings()
+    {
+        SwingUtilities.invokeLater(() ->
+        {
+            if (sidebar == null)
+            {
+                return;
+            }
+
+            items.sort((a, b) ->
+                    Integer.compare(a.getOriginalIndex(), b.getOriginalIndex()));
+
+            applySavedItemOrder();
+            rebuildSidebarOrder();
+
+            if (panel != null)
+            {
+                panel.refresh();
+            }
+        });
+    }
 }
