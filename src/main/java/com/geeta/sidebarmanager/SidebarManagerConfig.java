@@ -86,6 +86,18 @@ public interface SidebarManagerConfig extends Config
 		return NameAlignment.LEFT;
 	}
 
+
+	@ConfigItem(
+			keyName = "hiddenItems",
+			name = "Hidden Items",
+			description = "Stores hidden sidebar items",
+			hidden = true
+	)
+	default String hiddenItems()
+	{
+		return "";
+	}
+
 	enum NameAlignment
 	{
 		LEFT,

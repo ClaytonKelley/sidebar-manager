@@ -17,9 +17,12 @@ import javax.swing.JTabbedPane;
 import javax.swing.SwingUtilities;
 import javax.swing.event.ChangeListener;
 import net.runelite.client.util.ImageUtil;
+import net.runelite.client.config.ConfigManager;
 
 public class SidebarManager
 {
+    private static final String CONFIG_GROUP = "sidebarmanager";
+    private static final String HIDDEN_ITEMS_KEY = "hiddenItems";
     private static final String DEFAULT_STYLE =
             "tabInsets: 2,5,2,5; " +
                     "variableSize: true; " +
@@ -27,19 +30,22 @@ public class SidebarManager
                     "tabHeight: 26";
 
     private final SidebarManagerConfig config;
+    private final ConfigManager configManager;
 
-    private final List<Icon> originalIcons =
+    private final List<SidebarItem> items =
             new ArrayList<>();
 
     private JTabbedPane sidebar;
-
+    private SidebarManagerPanel panel;
     private ChangeListener sidebarChangeListener;
 
     @Inject
     public SidebarManager(
-            SidebarManagerConfig config)
+            SidebarManagerConfig config,
+            ConfigManager configManager)
     {
         this.config = config;
+        this.configManager = configManager;
     }
 
     public void start()
@@ -56,9 +62,15 @@ public class SidebarManager
                 return;
             }
 
-            captureOriginalIcons();
+            captureItems();
+            applyHiddenItems();
             applySidebarSettings();
             installSidebarListener();
+
+            if (panel != null)
+            {
+                panel.refresh();
+            }
 
             SwingUtilities.invokeLater(
                     this::updateCollapsedWidth
@@ -83,7 +95,7 @@ public class SidebarManager
 
             restoreRuneLiteSidebar();
 
-            originalIcons.clear();
+            items.clear();
             sidebar = null;
         });
     }
@@ -153,18 +165,29 @@ public class SidebarManager
         return null;
     }
 
-    private void captureOriginalIcons()
+    private void captureItems()
     {
-        originalIcons.clear();
+        items.clear();
 
         for (int i = 0;
              i < sidebar.getTabCount();
              i++)
         {
-            originalIcons.add(
-                    sidebar.getIconAt(i)
+            String tooltip =
+                    sidebar.getToolTipTextAt(i);
+
+            items.add(
+                    new SidebarItem(
+                            tooltip,
+                            sidebar.getComponentAt(i),
+                            sidebar.getIconAt(i),
+                            tooltip,
+                            i
+                    )
             );
         }
+        System.out.println("Sidebar tab count: " + sidebar.getTabCount());
+        System.out.println("Captured SidebarItems: " + items.size());
     }
 
     private void applySidebarSettings()
@@ -194,10 +217,16 @@ public class SidebarManager
 
     private void updateTab(int index)
     {
-        if (index < originalIcons.size())
+        Component component =
+                sidebar.getComponentAt(index);
+
+        SidebarItem item =
+                findItem(component);
+
+        if (item != null)
         {
             Icon originalIcon =
-                    originalIcons.get(index);
+                    item.getOriginalIcon();
 
             if (originalIcon != null)
             {
@@ -238,7 +267,9 @@ public class SidebarManager
         if (config.showPluginNames())
         {
             String name =
-                    sidebar.getToolTipTextAt(index);
+                    item != null
+                            ? item.getName()
+                            : sidebar.getToolTipTextAt(index);
 
             if (name == null)
             {
@@ -257,6 +288,20 @@ public class SidebarManager
                     null
             );
         }
+    }
+
+    private SidebarItem findItem(
+            Component component)
+    {
+        for (SidebarItem item : items)
+        {
+            if (item.getComponent() == component)
+            {
+                return item;
+            }
+        }
+
+        return null;
     }
 
     private BufferedImage iconToBufferedImage(
@@ -547,22 +592,50 @@ public class SidebarManager
     {
         clearSidebarSizeConstraint();
 
-        for (int i = 0;
-             i < sidebar.getTabCount();
-             i++)
+        for (SidebarItem item : items)
         {
+            if (sidebar.indexOfComponent(
+                    item.getComponent()) == -1)
+            {
+                int insertIndex =
+                        findInsertIndex(item);
+
+                sidebar.insertTab(
+                        null,
+                        item.getOriginalIcon(),
+                        item.getComponent(),
+                        item.getTooltip(),
+                        insertIndex
+                );
+            }
+        }
+
+        for (SidebarItem item : items)
+        {
+            int index =
+                    sidebar.indexOfComponent(
+                            item.getComponent()
+                    );
+
+            if (index == -1)
+            {
+                continue;
+            }
+
             sidebar.setTitleAt(
-                    i,
+                    index,
                     null
             );
 
-            if (i < originalIcons.size())
-            {
-                sidebar.setIconAt(
-                        i,
-                        originalIcons.get(i)
-                );
-            }
+            sidebar.setIconAt(
+                    index,
+                    item.getOriginalIcon()
+            );
+
+            sidebar.setToolTipTextAt(
+                    index,
+                    item.getTooltip()
+            );
         }
 
         sidebar.setTabLayoutPolicy(
@@ -577,4 +650,282 @@ public class SidebarManager
         sidebar.revalidate();
         sidebar.repaint();
     }
+
+    public void hideItem(SidebarItem item)
+    {
+        if (sidebar == null || item == null)
+        {
+            return;
+        }
+
+        int index = sidebar.indexOfComponent(item.getComponent());
+
+        if (index == -1)
+        {
+            return;
+        }
+
+        sidebar.removeTabAt(index);
+        setHidden(item, true);
+
+        clearSidebarSizeConstraint();
+
+        sidebar.revalidate();
+        sidebar.repaint();
+
+        SwingUtilities.invokeLater(this::updateCollapsedWidth);
+    }
+
+    public void showItem(SidebarItem item)
+    {
+        if (sidebar == null || item == null)
+        {
+            return;
+        }
+
+        if (sidebar.indexOfComponent(item.getComponent()) != -1)
+        {
+            return;
+        }
+
+        int insertIndex = findInsertIndex(item);
+
+        sidebar.insertTab(
+                null,
+                item.getOriginalIcon(),
+                item.getComponent(),
+                item.getTooltip(),
+                insertIndex
+        );
+
+        setHidden(item, false);
+
+        updateTab(insertIndex);
+
+        clearSidebarSizeConstraint();
+
+        sidebar.revalidate();
+        sidebar.repaint();
+
+        SwingUtilities.invokeLater(this::updateCollapsedWidth);
+    }
+
+    private int findInsertIndex(
+            SidebarItem item)
+    {
+        int insertIndex = 0;
+
+        for (SidebarItem otherItem : items)
+        {
+            if (otherItem == item)
+            {
+                break;
+            }
+
+            if (sidebar.indexOfComponent(
+                    otherItem.getComponent()) != -1)
+            {
+                insertIndex++;
+            }
+        }
+
+        return insertIndex;
+    }
+    public List<SidebarItem> getItems()
+    {
+        return new ArrayList<>(items);
+    }
+
+    public boolean isVisible(
+            SidebarItem item)
+    {
+        return sidebar != null &&
+                sidebar.indexOfComponent(
+                        item.getComponent()
+                ) != -1;
+    }
+
+    public boolean isManagerItem(
+            SidebarItem item)
+    {
+        return "Sidebar Manager".equals(
+                item.getName()
+        );
+    }
+
+    public void setPanel(SidebarManagerPanel panel)
+    {
+        this.panel = panel;
+    }
+
+    private boolean isHidden(SidebarItem item)
+    {
+        String hiddenItems = configManager.getConfiguration(
+                CONFIG_GROUP,
+                HIDDEN_ITEMS_KEY
+        );
+
+        if (hiddenItems == null || hiddenItems.isEmpty())
+        {
+            return false;
+        }
+
+        for (String name : hiddenItems.split("\n"))
+        {
+            if (name.equals(item.getName()))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private void setHidden(SidebarItem item, boolean hidden)
+    {
+        List<String> hiddenItems = new ArrayList<>();
+
+        String current = configManager.getConfiguration(
+                CONFIG_GROUP,
+                HIDDEN_ITEMS_KEY
+        );
+
+        if (current != null && !current.isEmpty())
+        {
+            for (String name : current.split("\n"))
+            {
+                if (!name.isEmpty())
+                {
+                    hiddenItems.add(name);
+                }
+            }
+        }
+
+        hiddenItems.remove(item.getName());
+
+        if (hidden)
+        {
+            hiddenItems.add(item.getName());
+        }
+
+        if (hiddenItems.isEmpty())
+        {
+            configManager.unsetConfiguration(
+                    CONFIG_GROUP,
+                    HIDDEN_ITEMS_KEY
+            );
+        }
+        else
+        {
+            configManager.setConfiguration(
+                    CONFIG_GROUP,
+                    HIDDEN_ITEMS_KEY,
+                    String.join("\n", hiddenItems)
+            );
+        }
+    }
+    private void applyHiddenItems()
+    {
+        for (SidebarItem item : items)
+        {
+            if (!isManagerItem(item) && isHidden(item))
+            {
+                int index = sidebar.indexOfComponent(item.getComponent());
+
+                if (index != -1)
+                {
+                    sidebar.removeTabAt(index);
+                }
+            }
+        }
+    }
+
+    public void showAllItems()
+    {
+        for (SidebarItem item : items)
+        {
+            if (!isVisible(item))
+            {
+                int insertIndex = findInsertIndex(item);
+
+                sidebar.insertTab(
+                        null,
+                        item.getOriginalIcon(),
+                        item.getComponent(),
+                        item.getTooltip(),
+                        insertIndex
+                );
+
+                updateTab(insertIndex);
+            }
+        }
+
+        configManager.unsetConfiguration(CONFIG_GROUP, HIDDEN_ITEMS_KEY);
+
+        clearSidebarSizeConstraint();
+        sidebar.revalidate();
+        sidebar.repaint();
+
+        if (panel != null)
+        {
+            panel.refresh();
+        }
+
+        SwingUtilities.invokeLater(this::updateCollapsedWidth);
+    }
+
+    public void applyHiddenSettings()
+    {
+        SwingUtilities.invokeLater(() ->
+        {
+            if (sidebar == null)
+            {
+                return;
+            }
+
+            for (SidebarItem item : items)
+            {
+                boolean shouldBeHidden =
+                        !isManagerItem(item) && isHidden(item);
+
+                boolean currentlyVisible = isVisible(item);
+
+                if (shouldBeHidden && currentlyVisible)
+                {
+                    int index = sidebar.indexOfComponent(item.getComponent());
+
+                    if (index != -1)
+                    {
+                        sidebar.removeTabAt(index);
+                    }
+                }
+                else if (!shouldBeHidden && !currentlyVisible)
+                {
+                    int insertIndex = findInsertIndex(item);
+
+                    sidebar.insertTab(
+                            null,
+                            item.getOriginalIcon(),
+                            item.getComponent(),
+                            item.getTooltip(),
+                            insertIndex
+                    );
+
+                    updateTab(insertIndex);
+                }
+            }
+
+            clearSidebarSizeConstraint();
+            sidebar.revalidate();
+            sidebar.repaint();
+
+            if (panel != null)
+            {
+                panel.refresh();
+            }
+
+            SwingUtilities.invokeLater(this::updateCollapsedWidth);
+        });
+    }
+
 }
