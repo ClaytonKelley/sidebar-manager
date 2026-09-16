@@ -21,8 +21,10 @@ import javax.swing.SwingUtilities;
 import javax.swing.event.ChangeListener;
 import net.runelite.client.util.ImageUtil;
 import net.runelite.client.config.ConfigManager;
+import lombok.extern.slf4j.Slf4j;
 
 
+@Slf4j
 public class SidebarManager
 {
     private static final String CONFIG_GROUP = "sidebarmanager";
@@ -74,7 +76,7 @@ public class SidebarManager
 
             if (sidebar == null)
             {
-                System.out.println(
+                log.debug(
                         "Could not find RuneLite sidebar"
                 );
                 return;
