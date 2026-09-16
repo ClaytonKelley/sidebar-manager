@@ -12,6 +12,9 @@ A RuneLite plugin for customizing and organizing the sidebar.
 - Use RuneLite's standard wrapping layout or a single-column scrollable sidebar
 - Keep the managed plugin list updated as other plugins are enabled or disabled
 
+![Settings_lIcons.png](docs/images/Settings_lIcons.png)
+![Sidebar_wNames.png](docs/images/Sidebar_wNames.png)
+![SideBarPanel.png](docs/images/SideBarPanel.png)
 ### Bugs
 
 - This is the first attempt at a runelite plugin, but it was one that I have wanted for a long time.
