@@ -7,6 +7,9 @@ import java.awt.Dimension;
 import java.awt.Frame;
 import java.awt.Graphics2D;
 import java.awt.Rectangle;
+import java.awt.event.ContainerAdapter;
+import java.awt.event.ContainerEvent;
+import java.awt.event.ContainerListener;
 import java.awt.image.BufferedImage;
 import java.util.ArrayList;
 import java.util.List;
@@ -18,6 +21,7 @@ import javax.swing.SwingUtilities;
 import javax.swing.event.ChangeListener;
 import net.runelite.client.util.ImageUtil;
 import net.runelite.client.config.ConfigManager;
+
 
 public class SidebarManager
 {
@@ -39,6 +43,12 @@ public class SidebarManager
     private JTabbedPane sidebar;
     private SidebarManagerPanel panel;
     private ChangeListener sidebarChangeListener;
+    private ContainerListener sidebarContainerListener;
+    private boolean changingTabs;
+    private boolean navigationPending;
+    private boolean running;
+    private long lifecycleVersion;
+    private long refreshVersion;
 
     @Inject
     public SidebarManager(
@@ -51,8 +61,15 @@ public class SidebarManager
 
     public void start()
     {
+        running = true;
+        long version = ++lifecycleVersion;
         SwingUtilities.invokeLater(() ->
         {
+            if (!running || version != lifecycleVersion)
+            {
+                return;
+            }
+
             sidebar = findSidebar();
 
             if (sidebar == null)
@@ -83,13 +100,21 @@ public class SidebarManager
 
     public void stop()
     {
+        running = false;
+        lifecycleVersion++;
+        refreshVersion++;
         if (sidebar == null)
         {
             return;
         }
 
+        JTabbedPane stoppingSidebar = sidebar;
         SwingUtilities.invokeLater(() ->
         {
+            if (sidebar != stoppingSidebar)
+            {
+                return;
+            }
             removeSidebarListener();
 
             sidebar.setPreferredSize(null);
@@ -100,6 +125,7 @@ public class SidebarManager
 
             items.clear();
             sidebar = null;
+            navigationPending = false;
         });
     }
 
@@ -107,7 +133,7 @@ public class SidebarManager
     {
         SwingUtilities.invokeLater(() ->
         {
-            if (sidebar == null)
+            if (sidebar == null || navigationPending)
             {
                 return;
             }
@@ -117,7 +143,7 @@ public class SidebarManager
         });
     }
 
-    private JTabbedPane findSidebar()
+    JTabbedPane findSidebar()
     {
         for (Frame frame : Frame.getFrames())
         {
@@ -189,8 +215,7 @@ public class SidebarManager
                     )
             );
         }
-        System.out.println("Sidebar tab count: " + sidebar.getTabCount());
-        System.out.println("Captured SidebarItems: " + items.size());
+
     }
 
     private void applySidebarSettings()
@@ -402,18 +427,124 @@ public class SidebarManager
             return;
         }
 
-        sidebarChangeListener = event ->
-                SwingUtilities.invokeLater(
-                        this::updateCollapsedWidth
-                );
+        sidebarChangeListener = event -> SwingUtilities.invokeLater(this::updateCollapsedWidth);
+        sidebar.addChangeListener(sidebarChangeListener);
 
-        sidebar.addChangeListener(
-                sidebarChangeListener
-        );
+        sidebarContainerListener = new ContainerAdapter()
+        {
+            @Override
+            public void componentAdded(ContainerEvent event)
+            {
+                if (changingTabs)
+                {
+                    return;
+                }
+
+                int index = sidebar.indexOfComponent(event.getChild());
+                if (index == -1 || findItem(event.getChild()) != null)
+                {
+                    return;
+                }
+
+                // RuneLite inserts at its native navigation index, even when our list is reordered.
+                for (SidebarItem item : items)
+                {
+                    if (item.getOriginalIndex() >= index)
+                    {
+                        item.setOriginalIndex(item.getOriginalIndex() + 1);
+                    }
+                }
+
+                String tooltip = sidebar.getToolTipTextAt(index);
+                items.add(new SidebarItem(tooltip, event.getChild(), sidebar.getIconAt(index), tooltip, index));
+                scheduleSidebarRefresh();
+            }
+
+            @Override
+            public void componentRemoved(ContainerEvent event)
+            {
+                if (changingTabs)
+                {
+                    return;
+                }
+
+                SidebarItem removed = findItem(event.getChild());
+                if (removed == null)
+                {
+                    return;
+                }
+
+                items.remove(removed);
+                for (SidebarItem item : items)
+                {
+                    if (item.getOriginalIndex() > removed.getOriginalIndex())
+                    {
+                        item.setOriginalIndex(item.getOriginalIndex() - 1);
+                    }
+                }
+                scheduleSidebarRefresh();
+            }
+        };
+        sidebar.addContainerListener(sidebarContainerListener);
+    }
+
+    public void onPluginChanged()
+    {
+        assert SwingUtilities.isEventDispatchThread();
+        if (!running || sidebar == null)
+        {
+            return;
+        }
+
+        if (!navigationPending)
+        {
+            navigationPending = true;
+            // ClientToolbar queues navigation mutations on the EDT. PluginChanged is posted
+            // synchronously before those mutations run. Restore the native tabs for that window:
+            // an already-hidden tab must be present for RuneLite's remove(component) to find it,
+            // and insertTab's native index must include the hidden tabs preceding a new entry.
+            restoreTrackedTabs();
+        }
+        scheduleSidebarRefresh();
+    }
+
+    private void scheduleSidebarRefresh()
+    {
+        if (!running)
+        {
+            return;
+        }
+
+        long version = ++refreshVersion;
+        JTabbedPane currentSidebar = sidebar;
+        SwingUtilities.invokeLater(() ->
+        {
+            if (!running || sidebar != currentSidebar || version != refreshVersion)
+            {
+                return;
+            }
+
+            // A batch can contain several lifecycle events and queued navigation changes.
+            // Only the last callback reapplies preferences, after those changes have finished.
+            navigationPending = false;
+            items.sort((a, b) -> Integer.compare(a.getOriginalIndex(), b.getOriginalIndex()));
+            applySavedItemOrder();
+            rebuildSidebarOrder();
+            applySidebarSettings();
+            if (panel != null)
+            {
+                panel.refresh();
+            }
+        });
     }
 
     private void removeSidebarListener()
     {
+        if (sidebarContainerListener != null)
+        {
+            sidebar.removeContainerListener(sidebarContainerListener);
+            sidebarContainerListener = null;
+        }
         if (sidebarChangeListener == null)
         {
             return;
@@ -428,7 +559,7 @@ public class SidebarManager
 
     private void updateCollapsedWidth()
     {
-        if (sidebar == null)
+        if (sidebar == null || navigationPending)
         {
             return;
         }
@@ -579,14 +710,12 @@ public class SidebarManager
         sidebar.revalidate();
         sidebar.repaint();
 
-        Container parent =
-                sidebar.getParent();
+        Container parent = sidebar.getParent();
 
         while (parent != null)
         {
             parent.revalidate();
             parent.repaint();
-
             parent = parent.getParent();
         }
     }
@@ -595,68 +724,101 @@ public class SidebarManager
     {
         clearSidebarSizeConstraint();
 
-        for (SidebarItem item : items)
-        {
-            if (sidebar.indexOfComponent(
-                    item.getComponent()) == -1)
-            {
-                int insertIndex =
-                        findInsertIndex(item);
+        restoreTrackedTabs();
+        sidebar.setTabLayoutPolicy(JTabbedPane.WRAP_TAB_LAYOUT);
+        sidebar.putClientProperty(FlatClientProperties.STYLE, DEFAULT_STYLE);
 
-                sidebar.insertTab(
-                        null,
-                        item.getOriginalIcon(),
-                        item.getComponent(),
-                        item.getTooltip(),
-                        insertIndex
-                );
+        sidebar.revalidate();
+        sidebar.repaint();
+    }
+
+    private void restoreTrackedTabs()
+    {
+        Component selectedComponent = sidebar.getSelectedComponent();
+
+        List<SidebarItem> originalOrder = new ArrayList<>(items);
+        originalOrder.sort((a, b) -> Integer.compare(a.getOriginalIndex(), b.getOriginalIndex()));
+
+        for (SidebarItem item : originalOrder)
+        {
+            int index = sidebar.indexOfComponent(item.getComponent());
+
+            if (index != -1)
+            {
+                removeTabAt(index);
             }
         }
 
-        for (SidebarItem item : items)
+        for (SidebarItem item : originalOrder)
         {
-            int index =
-                    sidebar.indexOfComponent(
-                            item.getComponent()
-                    );
+            insertTab(null, item.getOriginalIcon(), item.getComponent(), item.getTooltip(), sidebar.getTabCount());
+        }
+
+        for (SidebarItem item : originalOrder)
+        {
+            int index = sidebar.indexOfComponent(item.getComponent());
 
             if (index == -1)
             {
                 continue;
             }
 
-            sidebar.setTitleAt(
-                    index,
-                    null
-            );
-
-            sidebar.setIconAt(
-                    index,
-                    item.getOriginalIcon()
-            );
-
-            sidebar.setToolTipTextAt(
-                    index,
-                    item.getTooltip()
-            );
+            sidebar.setTitleAt(index, null);
+            sidebar.setIconAt(index, item.getOriginalIcon());
+            sidebar.setToolTipTextAt(index, item.getTooltip());
         }
 
-        sidebar.setTabLayoutPolicy(
-                JTabbedPane.WRAP_TAB_LAYOUT
-        );
+        sidebar.setSelectedIndex(selectedComponent == null ? -1 : sidebar.indexOfComponent(selectedComponent));
+    }
 
-        sidebar.putClientProperty(
-                FlatClientProperties.STYLE,
-                DEFAULT_STYLE
-        );
+    private void removeTabAt(int index)
+    {
+        boolean wasChangingTabs = changingTabs;
+        changingTabs = true;
+        try
+        {
+            sidebar.removeTabAt(index);
+        }
+        finally
+        {
+            changingTabs = wasChangingTabs;
+        }
+    }
 
-        sidebar.revalidate();
-        sidebar.repaint();
+    private void insertTab(String title, Icon icon, Component component, String tooltip, int index)
+    {
+        boolean wasChangingTabs = changingTabs;
+        changingTabs = true;
+        try
+        {
+            sidebar.insertTab(title, icon, component, tooltip, index);
+        }
+        finally
+        {
+            changingTabs = wasChangingTabs;
+        }
+    }
+
+    String getStoredValue(String key)
+    {
+        return configManager.getConfiguration(CONFIG_GROUP, key);
+    }
+
+    void setStoredValue(String key, String value)
+    {
+        if (value == null)
+        {
+            configManager.unsetConfiguration(CONFIG_GROUP, key);
+        }
+        else
+        {
+            configManager.setConfiguration(CONFIG_GROUP, key, value);
+        }
     }
 
     public void hideItem(SidebarItem item)
     {
-        if (sidebar == null || item == null)
+        if (sidebar == null || navigationPending || !items.contains(item) || isManagerItem(item))
         {
             return;
         }
@@ -668,7 +830,7 @@ public class SidebarManager
             return;
         }
 
-        sidebar.removeTabAt(index);
+        removeTabAt(index);
         setHidden(item, true);
 
         clearSidebarSizeConstraint();
@@ -681,7 +843,7 @@ public class SidebarManager
 
     public void showItem(SidebarItem item)
     {
-        if (sidebar == null || item == null)
+        if (sidebar == null || navigationPending || !items.contains(item))
         {
             return;
         }
@@ -693,7 +855,7 @@ public class SidebarManager
 
         int insertIndex = findInsertIndex(item);
 
-        sidebar.insertTab(
+        insertTab(
                 null,
                 item.getOriginalIcon(),
                 item.getComponent(),
@@ -763,10 +925,7 @@ public class SidebarManager
 
     private boolean isHidden(SidebarItem item)
     {
-        String hiddenItems = configManager.getConfiguration(
-                CONFIG_GROUP,
-                HIDDEN_ITEMS_KEY
-        );
+        String hiddenItems = getStoredValue(HIDDEN_ITEMS_KEY);
 
         if (hiddenItems == null || hiddenItems.isEmpty())
         {
@@ -788,10 +947,7 @@ public class SidebarManager
     {
         List<String> hiddenItems = new ArrayList<>();
 
-        String current = configManager.getConfiguration(
-                CONFIG_GROUP,
-                HIDDEN_ITEMS_KEY
-        );
+        String current = getStoredValue(HIDDEN_ITEMS_KEY);
 
         if (current != null && !current.isEmpty())
         {
@@ -813,18 +969,11 @@ public class SidebarManager
 
         if (hiddenItems.isEmpty())
         {
-            configManager.unsetConfiguration(
-                    CONFIG_GROUP,
-                    HIDDEN_ITEMS_KEY
-            );
+            setStoredValue(HIDDEN_ITEMS_KEY, null);
         }
         else
         {
-            configManager.setConfiguration(
-                    CONFIG_GROUP,
-                    HIDDEN_ITEMS_KEY,
-                    String.join("\n", hiddenItems)
-            );
+            setStoredValue(HIDDEN_ITEMS_KEY, String.join("\n", hiddenItems));
         }
     }
     private void applyHiddenItems()
@@ -837,7 +986,7 @@ public class SidebarManager
 
                 if (index != -1)
                 {
-                    sidebar.removeTabAt(index);
+                    removeTabAt(index);
                 }
             }
         }
@@ -845,13 +994,18 @@ public class SidebarManager
 
     public void showAllItems()
     {
+        if (sidebar == null || navigationPending)
+        {
+            return;
+        }
+
         for (SidebarItem item : items)
         {
             if (!isVisible(item))
             {
                 int insertIndex = findInsertIndex(item);
 
-                sidebar.insertTab(
+                insertTab(
                         null,
                         item.getOriginalIcon(),
                         item.getComponent(),
@@ -863,7 +1017,7 @@ public class SidebarManager
             }
         }
 
-        configManager.unsetConfiguration(CONFIG_GROUP, HIDDEN_ITEMS_KEY);
+        setStoredValue(HIDDEN_ITEMS_KEY, null);
 
         clearSidebarSizeConstraint();
         sidebar.revalidate();
@@ -881,7 +1035,7 @@ public class SidebarManager
     {
         SwingUtilities.invokeLater(() ->
         {
-            if (sidebar == null)
+            if (sidebar == null || navigationPending)
             {
                 return;
             }
@@ -899,14 +1053,14 @@ public class SidebarManager
 
                     if (index != -1)
                     {
-                        sidebar.removeTabAt(index);
+                        removeTabAt(index);
                     }
                 }
                 else if (!shouldBeHidden && !currentlyVisible)
                 {
                     int insertIndex = findInsertIndex(item);
 
-                    sidebar.insertTab(
+                    insertTab(
                             null,
                             item.getOriginalIcon(),
                             item.getComponent(),
@@ -933,7 +1087,7 @@ public class SidebarManager
 
     public void moveItem(SidebarItem item, int newIndex)
     {
-        if (sidebar == null || item == null)
+        if (sidebar == null || navigationPending || item == null)
         {
             return;
         }
@@ -958,6 +1112,11 @@ public class SidebarManager
 
     private void rebuildSidebarOrder()
     {
+        if (navigationPending)
+        {
+            return;
+        }
+
         int selectedIndex = sidebar.getSelectedIndex();
         Component selectedComponent = selectedIndex != -1
                 ? sidebar.getComponentAt(selectedIndex)
@@ -969,36 +1128,32 @@ public class SidebarManager
 
             if (index != -1)
             {
-                sidebar.removeTabAt(index);
+                removeTabAt(index);
             }
         }
 
         for (SidebarItem item : items)
         {
-            if (isHidden(item))
+            if (!isManagerItem(item) && isHidden(item))
             {
                 continue;
             }
 
-            sidebar.insertTab(
-                    null,
-                    item.getOriginalIcon(),
-                    item.getComponent(),
-                    item.getTooltip(),
-                    sidebar.getTabCount()
-            );
-
+            insertTab(null, item.getOriginalIcon(), item.getComponent(), item.getTooltip(), sidebar.getTabCount());
             updateTab(sidebar.getTabCount() - 1);
         }
 
         if (selectedComponent != null)
         {
             int newSelectedIndex = sidebar.indexOfComponent(selectedComponent);
-
             if (newSelectedIndex != -1)
             {
                 sidebar.setSelectedIndex(newSelectedIndex);
             }
+        }
+        else
+        {
+            sidebar.setSelectedIndex(-1);
         }
 
         clearSidebarSizeConstraint();
@@ -1016,19 +1171,31 @@ public class SidebarManager
             names.add(item.getName());
         }
 
-        configManager.setConfiguration(
-                CONFIG_GROUP,
-                ITEM_ORDER_KEY,
-                String.join("\n", names)
-        );
+        // Retain saved slots for temporarily disabled plugins while reordering active ones.
+        List<String> savedNames = new ArrayList<>();
+        String savedOrder = getStoredValue(ITEM_ORDER_KEY);
+        int nextActive = 0;
+        if (savedOrder != null && !savedOrder.isEmpty())
+        {
+            for (String name : savedOrder.split("\n"))
+            {
+                if (!names.contains(name))
+                {
+                    savedNames.add(name);
+                }
+                else if (nextActive < names.size())
+                {
+                    savedNames.add(names.get(nextActive++));
+                }
+            }
+        }
+        savedNames.addAll(names.subList(nextActive, names.size()));
+        setStoredValue(ITEM_ORDER_KEY, String.join("\n", savedNames));
     }
 
     private void applySavedItemOrder()
     {
-        String savedOrder = configManager.getConfiguration(
-                CONFIG_GROUP,
-                ITEM_ORDER_KEY
-        );
+        String savedOrder = getStoredValue(ITEM_ORDER_KEY);
 
         if (savedOrder == null || savedOrder.isEmpty())
         {
@@ -1071,7 +1238,7 @@ public class SidebarManager
         items.sort((a, b) ->
                 Integer.compare(a.getOriginalIndex(), b.getOriginalIndex()));
 
-        configManager.unsetConfiguration(CONFIG_GROUP, ITEM_ORDER_KEY);
+        setStoredValue(ITEM_ORDER_KEY, null);
 
         rebuildSidebarOrder();
 
@@ -1084,7 +1251,7 @@ public class SidebarManager
     {
         SwingUtilities.invokeLater(() ->
         {
-            if (sidebar == null)
+            if (sidebar == null || navigationPending)
             {
                 return;
             }

@@ -6,6 +6,7 @@ import java.awt.image.BufferedImage;
 import net.runelite.client.config.ConfigManager;
 import net.runelite.client.eventbus.Subscribe;
 import net.runelite.client.events.ConfigChanged;
+import net.runelite.client.events.PluginChanged;
 import net.runelite.client.plugins.Plugin;
 import net.runelite.client.plugins.PluginDescriptor;
 import net.runelite.client.ui.ClientToolbar;
@@ -73,6 +74,15 @@ public class SidebarManagerPlugin extends Plugin
 		}
 
 		panel = null;
+	}
+
+	@Subscribe
+	public void onPluginChanged(PluginChanged event)
+	{
+		if (event.getPlugin() != this)
+		{
+			sidebarManager.onPluginChanged();
+		}
 	}
 
 	@Subscribe

@@ -9,7 +9,7 @@ public class SidebarItem
     private final Component component;
     private final Icon originalIcon;
     private final String tooltip;
-    private final int originalIndex;
+    private int originalIndex;
 
     public SidebarItem(
             String name,
@@ -48,5 +48,10 @@ public class SidebarItem
     public int getOriginalIndex()
     {
         return originalIndex;
+    }
+
+    void setOriginalIndex(int originalIndex)
+    {
+        this.originalIndex = originalIndex;
     }
 }

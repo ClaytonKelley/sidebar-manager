@@ -7,3 +7,6 @@ build
 nbactions.xml
 nb-configuration.xml
 nbproject/
+
+# Local project task tracker
+/TASKS.local.md
